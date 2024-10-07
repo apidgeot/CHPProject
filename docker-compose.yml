@@ -1,0 +1,21 @@
+version: "3"
+services:
+  frontend:
+    restart: always
+    container_name: CHP-Frontend
+    build:
+      context: frontend
+      dockerfile: Dockerfile
+    ports:
+      - ${VITE_PORT}:80
+    depends_on:
+      - backend
+
+  backend:
+    restart: always
+    container_name: CHP-Backend
+    build:
+      context: backend
+      dockerfile: Dockerfile
+    ports:
+      - ${BACKEND_PORT}:8000
