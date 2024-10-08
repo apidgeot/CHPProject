@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import pandas as pd
 import json
+from functools import lru_cache
 import requests
 import time
 from fastapi.responses import FileResponse
@@ -49,6 +50,7 @@ def get_all_questions():
 
 questions_all = get_all_questions()
 
+cache = {}
 
 # Можели FastAPI
 class Question(BaseModel):
@@ -88,12 +90,7 @@ class ReportData(BaseModel):
 
 
 
-
-
-
-# Функции работы с лламой
-def llama_request(prompt, max_token=None):
-    # URL вашего сервера
+async def llama_request_async(prompt, max_token=None):
     url = 'http://172.17.0.3:11434/api/chat'
 
     payload = {
@@ -108,18 +105,12 @@ def llama_request(prompt, max_token=None):
         "max_token": max_token
     }
 
-    # Отправка POST-запроса
-    response = requests.post(
-        url,
-        data=json.dumps(payload)
-    )
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, json=payload) as response:
+            result = await response.json()
+            return result['message']['content']
 
-    #print(response.json()['message']['content'])
-    return response.json()['message']['content']
-
-def llama_create_schedule(formatted_text):
-    print('вход в llama_create_scedule: ', formatted_text)
-
+async def llama_create_schedule_async(formatted_text):
     prompt = """
     На основе приведенных пар вопросов и ответов составь основную информацию для временной шкалы В ТЕЧЕНИЕ ДНЯ ПРОИШЕСТВИЯ. Раздели ее на отдельные процессы, группируя события в логические цепочки. Каждый процесс должен включать этапы, события или действия, которые можно объединить по смыслу. Укажите время и кратко опишите содержание каждого этапа
    
@@ -130,20 +121,7 @@ def llama_create_schedule(formatted_text):
     """
 
     prompt = prompt.format(result=formatted_text)
-    result = llama_request(prompt)
-
-
-    prompt = """
-    На основе приведенных жанных и ответов составь основную информацию для временной шкалы В ТЕЧЕНИЕ ДНЯ ПРОИШЕСТВИЯ. Раздели ее на отдельные процессы, группируя события в логические цепочки. Каждый процесс должен включать этапы, события или действия, которые можно объединить по смыслу. Укажите время и кратко опишите содержание каждого этапа
-   
-    Вот текст: 
-    '''
-    {result}
-    '''
-    """
-
-    prompt = prompt.format(result=result)
-    result = llama_request(prompt)
+    result = await llama_request_async(prompt)
 
     prompt = """
     На основе этой выдержки сделай мне json структуру для временной шкалы по формату:
@@ -173,16 +151,105 @@ def llama_create_schedule(formatted_text):
     В json используй двойные кавычки!
     """
 
+    prompt = prompt.format(text=result)
+    result = await llama_request_async(prompt)
+
+    return result
+
+
+
+# Функции работы с лламой
+@lru_cache(maxsize=128)
+def llama_request(prompt, max_token=None):
+    # URL вашего сервера
+    url = 'http://172.17.0.3:11434/api/chat'
+
+    payload = {
+        "model": "llama3.1",
+        "messages": [
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ],
+        "stream": False,
+        "max_token": max_token
+    }
+
+    # Отправка POST-запроса
+    response = requests.post(
+        url,
+        data=json.dumps(payload)
+    )
+
+    print(response.json()['message']['content'])
+    return response.json()['message']['content']
+
+def llama_create_schedule(formatted_text):
+    print('вход в llama_create_scedule: ', formatted_text)
+
+    prompt = """
+    На основе приведенных пар вопросов и ответов составь основную информацию для временной шкалы В ТЕЧЕНИЕ ДНЯ ПРОИШЕСТВИЯ. Раздели ее на отдельные процессы, группируя события в логические цепочки. Каждый процесс должен включать этапы, события или действия, которые можно объединить по смыслу. Укажите время и кратко опишите содержание каждого этапа
+   
+    Вот текст: 
+    '''
+    {result}
+    '''
+    """
+
+    prompt = prompt.format(result=formatted_text)
+    result = llama_request(prompt)
+
+    prompt = """
+    На основе этой выдержки сделай мне json структуру для временной шкалы по формату:
+    Строгий шаблон JSON-ответа:
+    // формат HH:MM обязателен везде
+
+    {{
+        "process1": {{
+            "10:00-12:00": "Описание события 1, относящегося к process1.",
+            "12:00-13:00": "Описание события 2, относящегося к process1."
+        }},
+        "process2": {{
+            "09:00-11:00": "Описание события 1, относящегося к process2.",
+            "11:00-13:00": "Описание события 2, относящегося к process2."
+        }}
+    }}
+
+     Данные должны быть внутри json!
+    Используйте приведенные ниже данные для составления временной шкалы:\n
+    '''
+    {text}
+    '''
+
+    В ответе нужен JSON внутри блока кода (тройные кавычки):
+    ```json
+    ...
+    ```
+    \n
+    В json используй двойные кавычки!
+    """
 
     prompt = prompt.format(text=result)
     result = llama_request(prompt)
 
+    # Проверка и исправление формата JSON
+    try:
+        json_data = json.loads(result)
+    except json.decoder.JSONDecodeError:
+        # Исправление формата с использованием регулярных выражений
+        result = extract_json_object(result)
+        result = re.sub(r"'", '"', result)  # Преобразование одинарных кавычек в двойные
+        #result = re.sub(r'(\d{2}:\d{2})', r'"\1"', result)  # Добавление кавычек к времени
+        json_data = json.loads(result)
+
     prompt = """
         Строгий шаблон JSON-ответа который нужен:\n\n
+        // формат HH:MM обязателен везде
 
         {{
             "process1": {{
-                "10:00-12:00": "Описание события 1, относящегося к process1.",  // формат HH:MM обязателен везде
+                "10:00-12:00": "Описание события 1, относящегося к process1.",  
                 "12:00-13:00": "Описание события 2, относящегося к process1."
             }},
             "process2": {{
@@ -191,7 +258,7 @@ def llama_create_schedule(formatted_text):
             }}
         }}
 
-
+         Данные должны быть внутри json!
         Уточни содержит ли этот ответ json необходимого формата:\n
 
         '''
@@ -202,7 +269,7 @@ def llama_create_schedule(formatted_text):
         В ответ отправь мне ТОЛЬКО json в исправленном или старом варианте
     """
     
-    prompt = prompt.format(result=result)
+    prompt = prompt.format(result=json.dumps(json_data))
     result = llama_request(prompt)
 
     return result
@@ -227,7 +294,7 @@ def llama_create_isikava(formatted_text):
 
     {{
         "main_problem": "Основная проблема, выявленная в процессе.",
-        "branshes": {{
+        "branshes": [
             {{
                 "name": "branch_name_1",
                 "reasons": [
@@ -248,9 +315,11 @@ def llama_create_isikava(formatted_text):
                     "Причина 1, связанная с третьим источником проблемы.",
                     "Причина 2, связанная с третьим источником проблемы."
                 ]
-            }},
-        }}
+            }}
+        ]
     }}
+
+    Данные должны быть внутри json!
 
     Каждая ветвь может описывать причины, классифицируемые по категориям, таким как "человеческий фактор", "сбои технологии", "недостатки в инструментах" и т.д.
     Используйте следующие данные для составления диаграммы:
@@ -265,9 +334,18 @@ def llama_create_isikava(formatted_text):
     В json используй двойные кавычки!
     """
 
-
     prompt = prompt.format(text=result)
     result = llama_request(prompt)
+
+    # Проверка и исправление формата JSON
+    try:
+        json_data = json.loads(result)
+    except json.decoder.JSONDecodeError:
+        # Исправление формата с использованием регулярных выражений
+        result = extract_json_object(result)
+        result = re.sub(r"'", '"', result)  # Преобразование одинарных кавычек в двойные
+        #result = re.sub(r'(\d{2}:\d{2})', r'"\1"', result)  # Добавление кавычек к времени
+        json_data = json.loads(result)
 
     prompt = """
         Уточни содержит ли этот ответ json необходимого формата и отправь в ответ новый или этот же json!:\n
@@ -280,7 +358,7 @@ def llama_create_isikava(formatted_text):
 
         {{
             "main_problem": "Основная проблема, выявленная в процессе.",
-            "branshes": {{
+            "branshes": [
                 {{
                     "name": "branch_name_1",
                     "reasons": [
@@ -301,8 +379,8 @@ def llama_create_isikava(formatted_text):
                         "Причина 1, связанная с третьим источником проблемы.",
                         "Причина 2, связанная с третьим источником проблемы."
                     ]
-                }},
-            }}
+                }}
+            ]
         }}
 
         Если что-то не соответствует исправь на свое усмотрение\n
@@ -310,12 +388,12 @@ def llama_create_isikava(formatted_text):
         В ответ отправь мне только json в исправленном или старом варианте!!!
     """
 
-
-    prompt = prompt.format(result=result)
+    prompt = prompt.format(result=json.dumps(json_data))
     result = llama_request(prompt)
-
+    result = extract_json_object(result)
 
     return result
+
 
 
 # Функции для визуализации
@@ -588,7 +666,6 @@ def create_timeline(data):
 
 
 
-
 # Заполнение отчета по вопросам
 @app.post("/api/fill_report")
 async def fill_report(data: ReportData):
@@ -674,7 +751,6 @@ def extract_json_object(s):
 @app.post('/api/generate-ishikawa-image')
 def generate_ishikawa_image(text: FormattedText):
     try:
-        #json_data = llama_create_isikava(text.formatted_text)
         json_data = extract_json_object(text.formatted_text)
         data = json.loads(json_data)
 

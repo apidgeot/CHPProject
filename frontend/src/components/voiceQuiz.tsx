@@ -73,6 +73,9 @@ const QuestionVoice: React.FC = () => {
   const [currentBlock, setCurrentBlock] = useState('base_block');
   const [currentQuestionNum, setCurrentQuestionNum] = useState('1');
 
+  const [seconds, setSeconds] = useState(0); // Состояние для секундомера
+  const [timerActive, setTimerActive] = useState(false); // Состояние для контроля таймера
+
   const [currentBlockData, setCurrentBlockData] = useState<Block | null>(null);
 
   const [isSpeakingEnabled, setIsSpeakingEnabled] = useState(true);
@@ -614,6 +617,33 @@ const initializeFirstQuestion = () => {
     return () => window.removeEventListener('resize', adjustFontSize);
   }, [currentQuestion?.question]);
 
+  useEffect(() => {
+    let timer: number;
+
+    if (timerActive) {
+      // Запускаем таймер
+      timer = setInterval(() => {
+        setSeconds(prev => prev + 1); // Увеличиваем на 1 каждую секунду
+      }, 1000);
+    }
+
+    return () => clearInterval(timer); // Очищаем таймер при размонтировании компонента
+  }, [timerActive]);
+
+  // Эффект для остановки таймера, когда обе генерации завершены
+  useEffect(() => {
+    if (isIshikawaGenerated && isTimelineGenerated) {
+      setTimerActive(false); // Останавливаем таймер
+    }
+  }, [isIshikawaGenerated, isTimelineGenerated]); // Следим за изменениями этих состояний
+
+
+  useEffect(() => {
+    if (Ended) {
+      setTimerActive(true);
+    }
+  }, [Ended]); // Следим за изменениями этих состояний
+
   return (
     <div className="flex text-white p-10 w-full flex-col gap-8 text-3xl h-1/3 justify-center self-center mt-20">
       {!hasStarted ? (
@@ -628,6 +658,9 @@ const initializeFirstQuestion = () => {
       ) : Ended ? (
         <div className="flex flex-col items-center justify-center">
           <h1 className='justify-center text-center'>Спасибо, ответы записаны</h1>
+
+          <p>Идет генерация... Прошло времени: {seconds} сек</p>
+
           <button
             onClick={downloadResponsesAsTxt}
             className="p-4 bg-blue-500 rounded-xl shadow-sm shadow-blue-800 w-full text-center mt-4"
