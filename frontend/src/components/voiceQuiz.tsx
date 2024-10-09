@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef} from 'react';
 import axios from 'axios';
+
 //import { ChevronsRightLeft } from 'lucide-react';
 //import { TypeAnimation } from 'react-type-animation';
 //import { Mic, MicOff } from 'lucide-react';
@@ -72,9 +73,8 @@ const QuestionVoice: React.FC = () => {
   const [currentSheet, setCurrentSheet] = useState('base_sheet');
   const [currentBlock, setCurrentBlock] = useState('base_block');
   const [currentQuestionNum, setCurrentQuestionNum] = useState('1');
+  const [progress, setProgress] = useState(0);
 
-  const [seconds, setSeconds] = useState(0); // Состояние для секундомера
-  const [timerActive, setTimerActive] = useState(false); // Состояние для контроля таймера
 
   const [currentBlockData, setCurrentBlockData] = useState<Block | null>(null);
 
@@ -325,7 +325,8 @@ const generateIshikawaDiagram = async () => {
 
 const generateTimeline = async () => {
   try {
-    const filteredResponses = responses//.filter(response => response.time_related);
+    const filteredResponses = responses.filter(response => response.time_related);
+
     const formattedResponse = await axiosInstance.post('/format-answers', { questions: filteredResponses });
     const formattedText = formattedResponse.data.formatted_text;
 
@@ -617,32 +618,23 @@ const initializeFirstQuestion = () => {
     return () => window.removeEventListener('resize', adjustFontSize);
   }, [currentQuestion?.question]);
 
-  useEffect(() => {
-    let timer: number;
-
-    if (timerActive) {
-      // Запускаем таймер
-      timer = setInterval(() => {
-        setSeconds(prev => prev + 1); // Увеличиваем на 1 каждую секунду
-      }, 1000);
-    }
-
-    return () => clearInterval(timer); // Очищаем таймер при размонтировании компонента
-  }, [timerActive]);
-
-  // Эффект для остановки таймера, когда обе генерации завершены
-  useEffect(() => {
-    if (isIshikawaGenerated && isTimelineGenerated) {
-      setTimerActive(false); // Останавливаем таймер
-    }
-  }, [isIshikawaGenerated, isTimelineGenerated]); // Следим за изменениями этих состояний
-
 
   useEffect(() => {
     if (Ended) {
-      setTimerActive(true);
+      const interval = setInterval(() => {
+        setProgress((prevProgress) => {
+          if (prevProgress >= 100) {
+            clearInterval(interval);
+            return 100;
+          }
+          return prevProgress + 100 / (15 * 60); // 11 минут * 60 секунд
+        });
+      }, 1000); // Обновляем каждую секунду
+
+      return () => clearInterval(interval);
     }
-  }, [Ended]); // Следим за изменениями этих состояний
+  }, [Ended]);
+
 
   return (
     <div className="flex text-white p-10 w-full flex-col gap-8 text-3xl h-1/3 justify-center self-center mt-20">
@@ -659,8 +651,8 @@ const initializeFirstQuestion = () => {
         <div className="flex flex-col items-center justify-center">
           <h1 className='justify-center text-center'>Спасибо, ответы записаны</h1>
 
-          <p>Идет генерация... Прошло времени: {seconds} сек</p>
-
+          <h3>{Math.round(progress)}% готово</h3>
+          
           <button
             onClick={downloadResponsesAsTxt}
             className="p-4 bg-blue-500 rounded-xl shadow-sm shadow-blue-800 w-full text-center mt-4"
@@ -670,18 +662,20 @@ const initializeFirstQuestion = () => {
           <button
             onClick={downloadIshikawaDiagram}
             className={`p-4 rounded-xl shadow-sm shadow-blue-800 w-full text-center mt-4 ${!isIshikawaGenerated ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-500'}`}
-            disabled={!isIshikawaGenerated} // Блокируем кнопку до завершения генерации
+            disabled={!isIshikawaGenerated}
           >
             Диаграмма Исикавы
           </button>
 
+
           <button
             onClick={downloadTimeline}
             className={`p-4 rounded-xl shadow-sm shadow-blue-800 w-full text-center mt-4 ${!isTimelineGenerated ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-500'}`}
-            disabled={!isTimelineGenerated} // Блокируем кнопку до завершения генерации
+            disabled={!isTimelineGenerated}
           >
             Временная шкала
           </button>
+
 
           <button
             onClick={downloadDescriprion}
@@ -706,15 +700,6 @@ const initializeFirstQuestion = () => {
               }}
             >
               {currentQuestion.question}
-              {/*
-              <TypeAnimation
-                key={currentQuestion.question}
-                sequence={[capitalizeFirstLetter(currentQuestion.question || ''), 1000]}
-                wrapper="span"
-                cursor
-                repeat={0}
-                speed={75}
-            />*/}
             </div>
           </h1>
           <div className="flex flex-col gap-4">
