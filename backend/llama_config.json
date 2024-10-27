@@ -1,0 +1,4 @@
+{
+  "llama_url": "http://127.0.0.1:11434/api/chat",
+  "llama_model": "llama3.1:8b"
+}

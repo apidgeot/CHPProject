@@ -1,7 +1,10 @@
+# -*- coding: windows-1251 -*-
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import pandas as pd
+from  backend import utils
 import json
 from functools import lru_cache
 import requests
@@ -31,6 +34,7 @@ from docx import Document
 import io
 import traceback
 import re
+import aiohttp
 
 app = FastAPI()
 
@@ -45,14 +49,17 @@ app.add_middleware(
     allow_headers=["*"]
 )
 
-def get_all_questions():
-    return json.load(open('questions.json', 'r', encoding='utf-8'))
+
+def get_all_questions(filename="C:\\Users\dnsuser\PycharmProjects\kоsarev\\backend\questions.json"):
+    return json.load(open(filename, 'r', encoding='utf-8'))
+
 
 questions_all = get_all_questions()
 
 cache = {}
 
-# РњРѕР¶РµР»Рё FastAPI
+
+# Модели FastAPI
 class Question(BaseModel):
     question: str
     answer_type: str
@@ -60,26 +67,31 @@ class Question(BaseModel):
     next_question: Optional[str]
     time_related: Optional[bool]
 
+
 class Answer(BaseModel):
     question: str
     answer_type: str
     next_question: Optional[str] = None
-    options: Optional[Dict[str, Any]] = None  # Р­С‚Рѕ РїРѕР»Рµ РѕРїС†РёРѕРЅР°Р»СЊРЅРѕ
+    options: Optional[Dict[str, Any]] = None  # Это поле опционально
     answer: Optional[str] = None
     answer_option: Optional[str] = None
     time_related: Optional[bool] = None
+
 
 class Answers(BaseModel):
     questions: List[Answer]
     start_time: Optional[str] = None
     end_time: Optional[str] = None
 
+
 class FormattedText(BaseModel):
     formatted_text: str
+
 
 class OptionRequest(BaseModel):
     options: Dict[str, Dict[str, Any]]
     answer_text: str
+
 
 class ReportData(BaseModel):
     template_path: str
@@ -89,12 +101,12 @@ class ReportData(BaseModel):
     list_about_questions: list[str]
 
 
-
 async def llama_request_async(prompt, max_token=None):
-    url = 'http://172.17.0.3:11434/api/chat'
+    config = utils.read_config("C:\\Users\dnsuser\PycharmProjects\kоsarev\\backend\llama_config.json")
+    url = config['llama_url']
 
     payload = {
-        "model": "llama3.1",
+        "model": config['llama_model'],
         "messages": [
             {
                 "role": "user",
@@ -110,11 +122,11 @@ async def llama_request_async(prompt, max_token=None):
             result = await response.json()
             return result['message']['content']
 
+
 async def llama_create_schedule_async(formatted_text):
     prompt = """
-    РќР° РѕСЃРЅРѕРІРµ РїСЂРёРІРµРґРµРЅРЅС‹С… РїР°СЂ РІРѕРїСЂРѕСЃРѕРІ Рё РѕС‚РІРµС‚РѕРІ СЃРѕСЃС‚Р°РІСЊ РѕСЃРЅРѕРІРЅСѓСЋ РёРЅС„РѕСЂРјР°С†РёСЋ РґР»СЏ РІСЂРµРјРµРЅРЅРѕР№ С€РєР°Р»С‹ Р’ РўР•Р§Р•РќРР• Р”РќРЇ РџР РћРРЁР•РЎРўР’РРЇ. Р Р°Р·РґРµР»Рё РµРµ РЅР° РѕС‚РґРµР»СЊРЅС‹Рµ РїСЂРѕС†РµСЃСЃС‹, РіСЂСѓРїРїРёСЂСѓСЏ СЃРѕР±С‹С‚РёСЏ РІ Р»РѕРіРёС‡РµСЃРєРёРµ С†РµРїРѕС‡РєРё. РљР°Р¶РґС‹Р№ РїСЂРѕС†РµСЃСЃ РґРѕР»Р¶РµРЅ РІРєР»СЋС‡Р°С‚СЊ СЌС‚Р°РїС‹, СЃРѕР±С‹С‚РёСЏ РёР»Рё РґРµР№СЃС‚РІРёСЏ, РєРѕС‚РѕСЂС‹Рµ РјРѕР¶РЅРѕ РѕР±СЉРµРґРёРЅРёС‚СЊ РїРѕ СЃРјС‹СЃР»Сѓ. РЈРєР°Р¶РёС‚Рµ РІСЂРµРјСЏ Рё РєСЂР°С‚РєРѕ РѕРїРёС€РёС‚Рµ СЃРѕРґРµСЂР¶Р°РЅРёРµ РєР°Р¶РґРѕРіРѕ СЌС‚Р°РїР°
-   
-    Р’РѕС‚ С‚РµРєСЃС‚: 
+    На основе приведенных пар вопросов и ответов составь основную информацию для временной шкалы В ТЕЧЕНИЕ ДНЯ ПРОИШЕСТВИЯ. Раздели ее на отдельные процессы, группируя события в логические цепочки. Каждый процесс должен включать этапы, события или действия, которые можно объединить по смыслу. Укажите время и кратко опишите содержание каждого этапа
+    Вот текст: 
     '''
     {result}
     '''
@@ -124,31 +136,31 @@ async def llama_create_schedule_async(formatted_text):
     result = await llama_request_async(prompt)
 
     prompt = """
-    РќР° РѕСЃРЅРѕРІРµ СЌС‚РѕР№ РІС‹РґРµСЂР¶РєРё СЃРґРµР»Р°Р№ РјРЅРµ json СЃС‚СЂСѓРєС‚СѓСЂСѓ РґР»СЏ РІСЂРµРјРµРЅРЅРѕР№ С€РєР°Р»С‹ РїРѕ С„РѕСЂРјР°С‚Сѓ:
-    РЎС‚СЂРѕРіРёР№ С€Р°Р±Р»РѕРЅ JSON-РѕС‚РІРµС‚Р°:
+    На основе этой выдержки сделай мне json структуру для временной шкалы по формату:
+    Строгий шаблон JSON-ответа:
 
     {{
         "process1": {{
-            "10:00-12:00": "РћРїРёСЃР°РЅРёРµ СЃРѕР±С‹С‚РёСЏ 1, РѕС‚РЅРѕСЃСЏС‰РµРіРѕСЃСЏ Рє process1.", // С„РѕСЂРјР°С‚ HH:MM РѕР±СЏР·Р°С‚РµР»РµРЅ РІРµР·РґРµ
-            "12:00-13:00": "РћРїРёСЃР°РЅРёРµ СЃРѕР±С‹С‚РёСЏ 2, РѕС‚РЅРѕСЃСЏС‰РµРіРѕСЃСЏ Рє process1."
+            "10:00-12:00": "Описание события 1, относящегося к process1.", // формат HH:MM обязателен везде
+            "12:00-13:00": "Описание события 2, относящегося к process1."
         }},
         "process2": {{
-            "09:00-11:00": "РћРїРёСЃР°РЅРёРµ СЃРѕР±С‹С‚РёСЏ 1, РѕС‚РЅРѕСЃСЏС‰РµРіРѕСЃСЏ Рє process2.",
-            "11:00-13:00": "РћРїРёСЃР°РЅРёРµ СЃРѕР±С‹С‚РёСЏ 2, РѕС‚РЅРѕСЃСЏС‰РµРіРѕСЃСЏ Рє process2."
+            "09:00-11:00": "Описание события 1, относящегося к process2.",
+            "11:00-13:00": "Описание события 2, относящегося к process2."
         }}
     }}
 
-    РСЃРїРѕР»СЊР·СѓР№С‚Рµ РїСЂРёРІРµРґРµРЅРЅС‹Рµ РЅРёР¶Рµ РґР°РЅРЅС‹Рµ РґР»СЏ СЃРѕСЃС‚Р°РІР»РµРЅРёСЏ РІСЂРµРјРµРЅРЅРѕР№ С€РєР°Р»С‹:\n
+    Используйте приведенные ниже данные для составления временной шкалы:\n
     '''
     {text}
     '''
 
-    Р’ РѕС‚РІРµС‚Рµ РЅСѓР¶РµРЅ С‚РѕР»СЊРєРѕ JSON РІРЅСѓС‚СЂРё Р±Р»РѕРєР° РєРѕРґР° (С‚СЂРѕР№РЅС‹Рµ РєР°РІС‹С‡РєРё):
+    В ответе нужен только JSON внутри блока кода (тройные кавычки):
     ```json
     ...
     ```
     \n
-    Р’ json РёСЃРїРѕР»СЊР·СѓР№ РґРІРѕР№РЅС‹Рµ РєР°РІС‹С‡РєРё!
+    В json используй двойные кавычки!
     """
 
     prompt = prompt.format(text=result)
@@ -157,15 +169,15 @@ async def llama_create_schedule_async(formatted_text):
     return result
 
 
-
-# Р¤СѓРЅРєС†РёРё СЂР°Р±РѕС‚С‹ СЃ Р»Р»Р°РјРѕР№
+# Функции работы с лламой
 @lru_cache(maxsize=512)
 def llama_request(prompt, max_token=None):
-    # URL РІР°С€РµРіРѕ СЃРµСЂРІРµСЂР°
-    url = 'http://172.17.0.3:11434/api/chat'
+    # URL вашего сервера
+    config = utils.read_config("C:\\Users\dnsuser\PycharmProjects\kоsarev\\backend\llama_config.json")
+    url = config['llama_url']
 
     payload = {
-        "model": "llama3.1",
+        "model": config['llama_model'],
         "messages": [
             {
                 "role": "user",
@@ -176,7 +188,7 @@ def llama_request(prompt, max_token=None):
         "max_token": max_token
     }
 
-    # РћС‚РїСЂР°РІРєР° POST-Р·Р°РїСЂРѕСЃР°
+    # Отправка POST-запроса
     response = requests.post(
         url,
         data=json.dumps(payload)
@@ -185,17 +197,18 @@ def llama_request(prompt, max_token=None):
     print(response.json()['message']['content'])
     return response.json()['message']['content']
 
+
 def llama_create_schedule(formatted_text):
-    print('РІС…РѕРґ РІ llama_create_scedule: ', formatted_text)
+    print('вход в llama_create_scedule: ', formatted_text)
 
     prompt = """
-    РќР° РѕСЃРЅРѕРІРµ РїСЂРёРІРµРґРµРЅРЅС‹С… РїР°СЂ РІРѕРїСЂРѕСЃРѕРІ Рё РѕС‚РІРµС‚РѕРІ СЃРѕСЃС‚Р°РІСЊ РѕСЃРЅРѕРІРЅСѓСЋ РёРЅС„РѕСЂРјР°С†РёСЋ РґР»СЏ РІСЂРµРјРµРЅРЅРѕР№ С€РєР°Р»С‹ РІ РґРµРЅСЊ РїСЂРѕРёСЃС€РµСЃС‚РІРёСЏ. Р Р°Р·РґРµР»Рё РёРЅС„РѕСЂРјР°С†РёСЋ РЅР° Р»РѕРіРёС‡РµСЃРєРёРµ РїСЂРѕС†РµСЃСЃС‹, РіСЂСѓРїРїРёСЂСѓСЏ СЃРѕР±С‹С‚РёСЏ РІ СЃРјС‹СЃР»РѕРІС‹Рµ С†РµРїРѕС‡РєРё. 
+    На основе приведенных пар вопросов и ответов составь основную информацию для временной шкалы в день происшествия. Раздели информацию на логические процессы, группируя события в смысловые цепочки. 
 
-    РљР°Р¶РґС‹Р№ РїСЂРѕС†РµСЃСЃ РґРѕР»Р¶РµРЅ РІРєР»СЋС‡Р°С‚СЊ СЌС‚Р°РїС‹, СЃРѕР±С‹С‚РёСЏ РёР»Рё РґРµР№СЃС‚РІРёСЏ, СЃРІСЏР·Р°РЅРЅС‹Рµ РЅР°РїСЂСЏРјСѓСЋ СЃ РїСЂРѕРёСЃС€РµСЃС‚РІРёРµРј. РЈРєР°Р¶Рё С‚РѕС‡РЅРѕРµ РІСЂРµРјСЏ РЅР°С‡Р°Р»Р° Рё РѕРєРѕРЅС‡Р°РЅРёСЏ РєР°Р¶РґРѕРіРѕ СЃРѕР±С‹С‚РёСЏ РІ С„РѕСЂРјР°С‚Рµ HH:MM.
+    Каждый процесс должен включать этапы, события или действия, связанные напрямую с происшествием. Укажи точное время начала и окончания каждого события в формате HH:MM.
 
-    РќРµ Р°РєС†РµРЅС‚РёСЂСѓР№ РІРЅРёРјР°РЅРёРµ РЅР° РїСЂРµРґС€РµСЃС‚РІСѓСЋС‰РёС… РїСЂРѕРёСЃС€РµСЃС‚РІРёСЋ С„Р°РєС‚РѕСЂР°С…, Р° С„РѕРєСѓСЃРёСЂСѓР№СЃСЏ РЅР° СЃРѕР±С‹С‚РёСЏС…, РЅРµРїРѕСЃСЂРµРґСЃС‚РІРµРЅРЅРѕ СЃРІСЏР·Р°РЅРЅС‹С… СЃ РїСЂРѕРёСЃС€РµСЃС‚РІРёРµРј. Р’СЂРµРјСЏ РѕРєРѕРЅС‡Р°РЅРёСЏ СЂР°Р±РѕС‡РµРіРѕ РґРЅСЏ Р±СѓРґРµС‚ СЏРІР»СЏС‚СЊСЃСЏ РѕРєРѕРЅС‡Р°РЅРёРµРј РµСЃР»Рё РёРЅРѕРіРѕ РЅРµ СЃРєР°Р·Р°РЅРѕ!
+    Не акцентируй внимание на предшествующих происшествию факторах, а фокусируйся на событиях, непосредственно связанных с происшествием. Время окончания рабочего дня будет являться окончанием если иного не сказано!
 
-    РўРµРєСЃС‚:
+    Текст:
     '''
     {result}
     '''
@@ -205,31 +218,31 @@ def llama_create_schedule(formatted_text):
     result = llama_request(prompt)
 
     prompt = """
-    РќР° РѕСЃРЅРѕРІРµ РїСЂРёРІРµРґРµРЅРЅРѕР№ РІС‹РґРµСЂР¶РєРё СЃРґРµР»Р°Р№ JSON-СЃС‚СЂСѓРєС‚СѓСЂСѓ РґР»СЏ РІСЂРµРјРµРЅРЅРѕР№ С€РєР°Р»С‹, СЃРѕРѕС‚РІРµС‚СЃС‚РІСѓСЋС‰СѓСЋ СЃР»РµРґСѓСЋС‰РµРјСѓ С„РѕСЂРјР°С‚Сѓ:
+    На основе приведенной выдержки сделай JSON-структуру для временной шкалы, соответствующую следующему формату:
 
     {{
         "process1": {{
-            "10:00-11:00": "РћРїРёСЃР°РЅРёРµ СЃРѕР±С‹С‚РёСЏ 1, РѕС‚РЅРѕСЃСЏС‰РµРіРѕСЃСЏ Рє process1.",
-            "11:00-12:00": "РћРїРёСЃР°РЅРёРµ СЃРѕР±С‹С‚РёСЏ 2, РѕС‚РЅРѕСЃСЏС‰РµРіРѕСЃСЏ Рє process1."
+            "10:00-11:00": "Описание события 1, относящегося к process1.",
+            "11:00-12:00": "Описание события 2, относящегося к process1."
         }},
         "process2": {{
-            "09:00-10:00": "РћРїРёСЃР°РЅРёРµ СЃРѕР±С‹С‚РёСЏ 1, РѕС‚РЅРѕСЃСЏС‰РµРіРѕСЃСЏ Рє process2.",
-            "10:00-11:00": "РћРїРёСЃР°РЅРёРµ СЃРѕР±С‹С‚РёСЏ 2, РѕС‚РЅРѕСЃСЏС‰РµРіРѕСЃСЏ Рє process2."
+            "09:00-10:00": "Описание события 1, относящегося к process2.",
+            "10:00-11:00": "Описание события 2, относящегося к process2."
         }}
     }}
 
-    РўСЂРµР±РѕРІР°РЅРёСЏ:
-    - Р’СЂРµРјСЏ РІ С„РѕСЂРјР°С‚Рµ HH:MM-HH:MM.
-    - РЎРѕР±С‹С‚РёСЏ РґРѕР»Р¶РЅС‹ Р±С‹С‚СЊ СЃРіСЂСѓРїРїРёСЂРѕРІР°РЅС‹ РїРѕ Р»РѕРіРёС‡РµСЃРєРёРј РїСЂРѕС†РµСЃСЃР°Рј.
-    - РЎС‚СЂРѕРіРѕРµ РёСЃРїРѕР»СЊР·РѕРІР°РЅРёРµ РґРІРѕР№РЅС‹С… РєР°РІС‹С‡РµРє РІ JSON-РѕС‚РІРµС‚Рµ.
-    - Р’СЂРµРјСЏ РѕРєРѕРЅС‡Р°РЅРёСЏ СЂР°Р±РѕС‡РµРіРѕ РґРЅСЏ Р±СѓРґРµС‚ СЏРІР»СЏС‚СЊСЃСЏ РѕРєРѕРЅС‡Р°РЅРёРµРј РµСЃР»Рё РёРЅРѕРіРѕ РЅРµ СЃРєР°Р·Р°РЅРѕ!
+    Требования:
+    - Время в формате HH:MM-HH:MM.
+    - События должны быть сгруппированы по логическим процессам.
+    - Строгое использование двойных кавычек в JSON-ответе.
+    - Время окончания рабочего дня будет являться окончанием если иного не сказано!
 
-    РСЃРїРѕР»СЊР·СѓР№ СЃР»РµРґСѓСЋС‰РёРµ РґР°РЅРЅС‹Рµ РґР»СЏ СЃРѕСЃС‚Р°РІР»РµРЅРёСЏ РІСЂРµРјРµРЅРЅРѕР№ С€РєР°Р»С‹:
+    Используй следующие данные для составления временной шкалы:
     '''
     {text}
     '''
 
-    РћС‚РІРµС‚ РґРѕР»Р¶РµРЅ Р±С‹С‚СЊ РІ С„РѕСЂРјР°С‚Рµ JSON РІРЅСѓС‚СЂРё Р±Р»РѕРєР° РєРѕРґР°:
+    Ответ должен быть в формате JSON внутри блока кода:
     ```json
     ...
 
@@ -238,25 +251,26 @@ def llama_create_schedule(formatted_text):
     prompt = prompt.format(text=result)
     result = llama_request(prompt)
 
-    # РџСЂРѕРІРµСЂРєР° Рё РёСЃРїСЂР°РІР»РµРЅРёРµ С„РѕСЂРјР°С‚Р° JSON
+    # Проверка и исправление формата JSON
     try:
         json_data = json.loads(result)
     except json.decoder.JSONDecodeError:
-        # РСЃРїСЂР°РІР»РµРЅРёРµ С„РѕСЂРјР°С‚Р° СЃ РёСЃРїРѕР»СЊР·РѕРІР°РЅРёРµРј СЂРµРіСѓР»СЏСЂРЅС‹С… РІС‹СЂР°Р¶РµРЅРёР№
+        # Исправление формата с использованием регулярных выражений
         result = extract_json_object(result)
-        result = re.sub(r"'", '"', result)  # РџСЂРµРѕР±СЂР°Р·РѕРІР°РЅРёРµ РѕРґРёРЅР°СЂРЅС‹С… РєР°РІС‹С‡РµРє РІ РґРІРѕР№РЅС‹Рµ
-        #result = re.sub(r'(\d{2}:\d{2})', r'"\1"', result)  # Р”РѕР±Р°РІР»РµРЅРёРµ РєР°РІС‹С‡РµРє Рє РІСЂРµРјРµРЅРё
+        result = re.sub(r"'", '"', result)  # Преобразование одинарных кавычек в двойные
+        #result = re.sub(r'(\d{2}:\d{2})', r'"\1"', result)  # Добавление кавычек к времени
         json_data = json.loads(result)
 
     result = json.dumps(json_data)
 
     return result
 
+
 def llama_create_isikava(formatted_text):
     prompt = """
-    РСЃРїРѕР»СЊР·СѓСЏ РїР°СЂС‹ РІРѕРїСЂРѕСЃРѕРІ Рё РѕС‚РІРµС‚РѕРІ РЅРёР¶Рµ, СЃРѕР·РґР°Р№С‚Рµ РґР°РЅРЅС‹Рµ РґР»СЏ РґРёР°РіСЂР°РјРјС‹ РїСЂРёС‡РёРЅРЅРѕ-СЃР»РµРґСЃС‚РІРµРЅРЅС‹С… СЃРІСЏР·РµР№ (РґРёР°РіСЂР°РјРјСѓ РСЃРёРєР°РІС‹) РІ С‚РµРєСЃС‚РѕРІРѕРј С„РѕСЂРјР°С‚Рµ. РћРїСЂРµРґРµР»РёС‚Рµ РѕСЃРЅРѕРІРЅСѓСЋ РїСЂРѕР±Р»РµРјСѓ Рё РІС‹РґРµР»РёС‚Рµ РЅРµСЃРєРѕР»СЊРєРѕ РєР»СЋС‡РµРІС‹С… РІРµС‚РІРµР№, РєР°Р¶РґР°СЏ РёР· РєРѕС‚РѕСЂС‹С… РІРєР»СЋС‡Р°РµС‚ РЅР°Р±РѕСЂ РїСЂРёС‡РёРЅ, РІС‹СЏРІР»РµРЅРЅС‹С… РІ РѕС‚РІРµС‚Р°С…
+    Используя пары вопросов и ответов ниже, создайте данные для диаграммы причинно-следственных связей (диаграмму Исикавы) в текстовом формате. Определите основную проблему и выделите несколько ключевых ветвей, каждая из которых включает набор причин, выявленных в ответах
 
-    РСЃРїРѕР»СЊР·СѓР№С‚Рµ СЃР»РµРґСѓСЋС‰РёРµ РїР°СЂС‹ РІРѕРїСЂРѕСЃРѕРІ Рё РѕС‚РІРµС‚РѕРІ РґР»СЏ СЃРѕСЃС‚Р°РІР»РµРЅРёСЏ РЅРµРѕР±С…РѕРґРёРјРѕР№ РІС‹РґРµСЂР¶РєРё:
+    Используйте следующие пары вопросов и ответов для составления необходимой выдержки:
     '''
     {text}
     '''
@@ -266,63 +280,63 @@ def llama_create_isikava(formatted_text):
     result = llama_request(prompt)
 
     prompt = """
-    РСЃРїРѕР»СЊР·СѓСЏ РґР°РЅРЅС‹Рµ РЅРёР¶Рµ, СЃРѕР·РґР°Р№С‚Рµ РґР°РЅРЅС‹Рµ РґР»СЏ РґРёР°РіСЂР°РјРјС‹ РїСЂРёС‡РёРЅРЅРѕ-СЃР»РµРґСЃС‚РІРµРЅРЅС‹С… СЃРІСЏР·РµР№ (РґРёР°РіСЂР°РјРјСѓ РСЃРёРєР°РІС‹) РІ С„РѕСЂРјР°С‚Рµ JSON. РћРїСЂРµРґРµР»РёС‚Рµ РѕСЃРЅРѕРІРЅСѓСЋ РїСЂРѕР±Р»РµРјСѓ Рё РІС‹РґРµР»РёС‚Рµ РЅРµСЃРєРѕР»СЊРєРѕ РєР»СЋС‡РµРІС‹С… РІРµС‚РІРµР№, РєР°Р¶РґР°СЏ РёР· РєРѕС‚РѕСЂС‹С… РІРєР»СЋС‡Р°РµС‚ РЅР°Р±РѕСЂ РїСЂРёС‡РёРЅ, РІС‹СЏРІР»РµРЅРЅС‹С… РІ РѕС‚РІРµС‚Р°С…. РљР°Р¶РґР°СЏ РІРµС‚РІСЊ РґРѕР»Р¶РЅР° РїСЂРµРґСЃС‚Р°РІР»СЏС‚СЊ РёСЃС‚РѕС‡РЅРёРє РїСЂРѕР±Р»РµРјС‹, Р° РєР°Р¶РґР°СЏ РїСЂРёС‡РёРЅР° РІРЅСѓС‚СЂРё РІРµС‚РІРё РѕС‚СЂР°Р¶Р°С‚СЊ РІР°Р¶РЅС‹Рµ Р°СЃРїРµРєС‚С‹, РІС‹СЏРІР»РµРЅРЅС‹Рµ РІ РѕС‚РІРµС‚Р°С….
+    Используя данные ниже, создайте данные для диаграммы причинно-следственных связей (диаграмму Исикавы) в формате JSON. Определите основную проблему и выделите несколько ключевых ветвей, каждая из которых включает набор причин, выявленных в ответах. Каждая ветвь должна представлять источник проблемы, а каждая причина внутри ветви отражать важные аспекты, выявленные в ответах.
 
-    РЎС‚СЂРѕРіРёР№ С€Р°Р±Р»РѕРЅ JSON-РѕС‚РІРµС‚Р°:
+    Строгий шаблон JSON-ответа:
 
     {{
-        "main_problem": "РћСЃРЅРѕРІРЅР°СЏ РїСЂРѕР±Р»РµРјР°, РІС‹СЏРІР»РµРЅРЅР°СЏ РІ РїСЂРѕС†РµСЃСЃРµ.",
+        "main_problem": "Основная проблема, выявленная в процессе.",
         "branshes": [
             {{
                 "name": "branch_name_1",
                 "reasons": [
-                    "РџСЂРёС‡РёРЅР° 1, СЃРІСЏР·Р°РЅРЅР°СЏ СЃ РїРµСЂРІС‹Рј РёСЃС‚РѕС‡РЅРёРєРѕРј РїСЂРѕР±Р»РµРјС‹.",
-                    "РџСЂРёС‡РёРЅР° 2, СЃРІСЏР·Р°РЅРЅР°СЏ СЃ РїРµСЂРІС‹Рј РёСЃС‚РѕС‡РЅРёРєРѕРј РїСЂРѕР±Р»РµРјС‹."
+                    "Причина 1, связанная с первым источником проблемы.",
+                    "Причина 2, связанная с первым источником проблемы."
                 ]
             }},
             {{
                 "name": "branch_name_2",
                 "reasons": [
-                    "РџСЂРёС‡РёРЅР° 1, СЃРІСЏР·Р°РЅРЅР°СЏ СЃ РІС‚РѕСЂС‹Рј РёСЃС‚РѕС‡РЅРёРєРѕРј РїСЂРѕР±Р»РµРјС‹.",
-                    "РџСЂРёС‡РёРЅР° 2, СЃРІСЏР·Р°РЅРЅР°СЏ СЃ РІС‚РѕСЂС‹Рј РёСЃС‚РѕС‡РЅРёРєРѕРј РїСЂРѕР±Р»РµРјС‹."
+                    "Причина 1, связанная с вторым источником проблемы.",
+                    "Причина 2, связанная с вторым источником проблемы."
                 ]
             }},
             {{
                 "name": "branch_name_3",
                 "reasons": [
-                    "РџСЂРёС‡РёРЅР° 1, СЃРІСЏР·Р°РЅРЅР°СЏ СЃ С‚СЂРµС‚СЊРёРј РёСЃС‚РѕС‡РЅРёРєРѕРј РїСЂРѕР±Р»РµРјС‹.",
-                    "РџСЂРёС‡РёРЅР° 2, СЃРІСЏР·Р°РЅРЅР°СЏ СЃ С‚СЂРµС‚СЊРёРј РёСЃС‚РѕС‡РЅРёРєРѕРј РїСЂРѕР±Р»РµРјС‹."
+                    "Причина 1, связанная с третьим источником проблемы.",
+                    "Причина 2, связанная с третьим источником проблемы."
                 ]
             }}
         ]
     }}
 
-    Р”Р°РЅРЅС‹Рµ РґРѕР»Р¶РЅС‹ Р±С‹С‚СЊ РІРЅСѓС‚СЂРё json!
+    Данные должны быть внутри json!
 
-    РљР°Р¶РґР°СЏ РІРµС‚РІСЊ РјРѕР¶РµС‚ РѕРїРёСЃС‹РІР°С‚СЊ РїСЂРёС‡РёРЅС‹, РєР»Р°СЃСЃРёС„РёС†РёСЂСѓРµРјС‹Рµ РїРѕ РєР°С‚РµРіРѕСЂРёСЏРј, С‚Р°РєРёРј РєР°Рє "С‡РµР»РѕРІРµС‡РµСЃРєРёР№ С„Р°РєС‚РѕСЂ", "СЃР±РѕРё С‚РµС…РЅРѕР»РѕРіРёРё", "РЅРµРґРѕСЃС‚Р°С‚РєРё РІ РёРЅСЃС‚СЂСѓРјРµРЅС‚Р°С…" Рё С‚.Рґ.
-    РСЃРїРѕР»СЊР·СѓР№С‚Рµ СЃР»РµРґСѓСЋС‰РёРµ РґР°РЅРЅС‹Рµ РґР»СЏ СЃРѕСЃС‚Р°РІР»РµРЅРёСЏ РґРёР°РіСЂР°РјРјС‹:
+    Каждая ветвь может описывать причины, классифицируемые по категориям, таким как "человеческий фактор", "сбои технологии", "недостатки в инструментах" и т.д.
+    Используйте следующие данные для составления диаграммы:
     '''
     {text}
     '''
 
-    Р’ РѕС‚РІРµС‚Рµ РЅСѓР¶РµРЅ С‚РѕР»СЊРєРѕ JSON РІРЅСѓС‚СЂРё Р±Р»РѕРєР° РєРѕРґР° (С‚СЂРѕР№РЅС‹Рµ РєР°РІС‹С‡РєРё):
+    В ответе нужен только JSON внутри блока кода (тройные кавычки):
     ```json
     ...
     ```
-    Р’ json РёСЃРїРѕР»СЊР·СѓР№ РґРІРѕР№РЅС‹Рµ РєР°РІС‹С‡РєРё!
+    В json используй двойные кавычки!
     """
 
     prompt = prompt.format(text=result)
     result = llama_request(prompt)
 
-    # РџСЂРѕРІРµСЂРєР° Рё РёСЃРїСЂР°РІР»РµРЅРёРµ С„РѕСЂРјР°С‚Р° JSON
+    # Проверка и исправление формата JSON
     try:
         json_data = json.loads(result)
     except json.decoder.JSONDecodeError:
-        # РСЃРїСЂР°РІР»РµРЅРёРµ С„РѕСЂРјР°С‚Р° СЃ РёСЃРїРѕР»СЊР·РѕРІР°РЅРёРµРј СЂРµРіСѓР»СЏСЂРЅС‹С… РІС‹СЂР°Р¶РµРЅРёР№
+        # Исправление формата с использованием регулярных выражений
         result = extract_json_object(result)
-        result = re.sub(r"'", '"', result)  # РџСЂРµРѕР±СЂР°Р·РѕРІР°РЅРёРµ РѕРґРёРЅР°СЂРЅС‹С… РєР°РІС‹С‡РµРє РІ РґРІРѕР№РЅС‹Рµ
-        #result = re.sub(r'(\d{2}:\d{2})', r'"\1"', result)  # Р”РѕР±Р°РІР»РµРЅРёРµ РєР°РІС‹С‡РµРє Рє РІСЂРµРјРµРЅРё
+        result = re.sub(r"'", '"', result)  # Преобразование одинарных кавычек в двойные
+        #result = re.sub(r'(\d{2}:\d{2})', r'"\1"', result)  # Добавление кавычек к времени
         json_data = json.loads(result)
 
 
@@ -331,14 +345,14 @@ def llama_create_isikava(formatted_text):
     return result
 
 
-
-# Р¤СѓРЅРєС†РёРё РґР»СЏ РІРёР·СѓР°Р»РёР·Р°С†РёРё
+# Функции для визуализации
 def save_isikava_image(data, filename):
     draw_isikava(data)
     image_path = os.path.join(IMAGE_DIR, filename)
     plt.savefig(image_path, bbox_inches='tight')
     plt.close()
     return image_path
+
 
 def save_timeline_image(data, filename):
     create_timeline(data)
@@ -347,55 +361,56 @@ def save_timeline_image(data, filename):
     plt.close()
     return image_path
 
+
 def draw_isikava(data):
-    # РР·РІР»РµРєР°РµРј РѕСЃРЅРѕРІРЅСѓСЋ РїСЂРѕР±Р»РµРјСѓ
+    # Извлекаем основную проблему
     main_problem = data['main_problem']
 
-    # РР·РІР»РµРєР°РµРј РІРµС‚РІРё Рё РїСЂРёС‡РёРЅС‹
+    # Извлекаем ветви и причины
     branches = data['branches']
     num_branches = len(branches)
 
-    # РќР°С…РѕРґРёРј РјР°РєСЃРёРјР°Р»СЊРЅРѕРµ РєРѕР»РёС‡РµСЃС‚РІРѕ РїСЂРёС‡РёРЅ
+    # Находим максимальное количество причин
     max_causes = max(len(branch['reasons']) for branch in branches)
 
-    # РќР°СЃС‚СЂР°РёРІР°РµРј СЂР°Р·РјРµСЂ С„РёРіСѓСЂС‹ РІ Р·Р°РІРёСЃРёРјРѕСЃС‚Рё РѕС‚ РґР°РЅРЅС‹С…
+    # Настраиваем размер фигуры в зависимости от данных
     fig_width = 14
     fig_height = max(6, num_branches * 2)
     fig, ax = plt.subplots(figsize=(fig_width, fig_height))
     ax.axis('off')
 
-    # Р”РѕР±Р°РІР»СЏРµРј С„РѕРЅ
+    # Добавляем фон
     ax.set_facecolor('#f0f8ff')
 
-    # Р РёСЃСѓРµРј РѕСЃРЅРѕРІРЅРѕР№ С…СЂРµР±РµС‚ СЃ РіСЂР°РґРёРµРЅС‚РѕРј
+    # Рисуем основной хребет с градиентом
     spine_length = 20
     ax.plot([0, spine_length], [0, 0], color='#1f4e79', linewidth=4, solid_capstyle='round')
 
-    # РћР±РІРѕРґРёРј РѕСЃРЅРѕРІРЅСѓСЋ РїСЂРѕР±Р»РµРјСѓ РІ СЃС‚РёР»СЊРЅСѓСЋ СЂР°РјРєСѓ
+    # Обводим основную проблему в стильную рамку
     wrapped_main_problem = textwrap.fill(main_problem, width=30)
     bbox_props = dict(boxstyle="round,pad=1", fc="#add8e6", ec="#1f4e79", lw=2)
     ax.text(spine_length, 0, wrapped_main_problem, fontsize=10, fontweight='bold',
             va='center', ha='left', bbox=bbox_props, color='#1f4e79')
 
-    # Р РёСЃСѓРµРј С…РІРѕСЃС‚ СЂС‹Р±С‹ СЃ Р±РѕР»РµРµ РґРµС‚Р°Р»СЊРЅС‹Рј РґРёР·Р°Р№РЅРѕРј
+    # Рисуем хвост рыбы с более детальным дизайном
     tail = Polygon([[-1, -0.5], [0, 0], [-1, 0.5]], closed=True, fc='#1f4e79', ec='#1f4e79')
     ax.add_patch(tail)
 
-    # Р¦РІРµС‚РѕРІР°СЏ РїР°Р»РёС‚СЂР° РґР»СЏ РІРµС‚РІРµР№
+    # Цветовая палитра для ветвей
     colors = ['#87ceeb', '#4682b4', '#5f9ea0', '#b0c4de', '#add8e6']
 
-    # РџРѕР·РёС†РёРё РІРµС‚РІРµР№ РІРґРѕР»СЊ С…СЂРµР±С‚Р°
+    # Позиции ветвей вдоль хребта
     branch_x_positions = np.linspace(spine_length * 0.1, spine_length * 0.9, num_branches)
 
     for i, branch in enumerate(branches):
         branch_name = branch['name']
         causes = branch['reasons']
         branch_x = branch_x_positions[i]
-        branch_color = colors[i % len(colors)]  # РџСЂРёРјРµРЅСЏРµРј С†РІРµС‚ Рє РІРµС‚РІРё
+        branch_color = colors[i % len(colors)]  # Применяем цвет к ветви
 
-        # РћРїСЂРµРґРµР»СЏРµРј, СЂРёСЃРѕРІР°С‚СЊ Р»Рё РІРµС‚РІСЊ РІРІРµСЂС… РёР»Рё РІРЅРёР·
+        # Определяем, рисовать ли ветвь вверх или вниз
         if i % 2 == 0:
-            branch_y = 4 + len(causes)  # Р”РµР»Р°РµРј РїСЂРѕСЃС‚СЂР°РЅСЃС‚РІРѕ РґР»СЏ РїСЂРёС‡РёРЅ
+            branch_y = 4 + len(causes)  # Делаем пространство для причин
             y_direction = 1
             valign = 'bottom'
         else:
@@ -403,26 +418,26 @@ def draw_isikava(data):
             y_direction = -1
             valign = 'top'
 
-        # Р РёСЃСѓРµРј Р»РёРЅРёСЋ РІРµС‚РІРё СЃ Р±РѕР»РµРµ С‚РѕР»СЃС‚С‹Рј СЃС‚РёР»РµРј Рё СЃС‚СЂРµР»РєРѕР№
+        # Рисуем линию ветви с более толстым стилем и стрелкой
         arrow = FancyArrowPatch((branch_x, 0), (branch_x, branch_y), arrowstyle='->',
                                 mutation_scale=20, linewidth=2, color=branch_color)
         ax.add_patch(arrow)
 
-        # Р”РѕР±Р°РІР»СЏРµРј РЅР°Р·РІР°РЅРёРµ РІРµС‚РІРё РІ СЂР°РјРєСѓ
+        # Добавляем название ветви в рамку
         wrapped_branch_name = textwrap.fill(branch_name, width=20)
         bbox_branch = dict(boxstyle="round,pad=0.5", fc="#f0f8ff", ec=branch_color, lw=2)
         ax.text(branch_x, branch_y + y_direction * 0.5, wrapped_branch_name, fontsize=12,
                 va=valign, ha='center', fontweight='bold', color=branch_color, bbox=bbox_branch)
 
-        # Р РёСЃСѓРµРј РїСЂРёС‡РёРЅС‹ РІРґРѕР»СЊ РІРµС‚РІРё СЃ Р±РѕР»РµРµ СЃС‚РёР»СЊРЅС‹Рј РѕС„РѕСЂРјР»РµРЅРёРµРј
+        # Рисуем причины вдоль ветви с более стильным оформлением
         num_causes = len(causes)
-        cause_positions = np.linspace(0, branch_y, num_causes + 2)[1:-1]  # РёСЃРєР»СЋС‡Р°РµРј РЅР°С‡Р°Р»СЊРЅСѓСЋ Рё РєРѕРЅРµС‡РЅСѓСЋ С‚РѕС‡РєРё
+        cause_positions = np.linspace(0, branch_y, num_causes + 2)[1:-1]  # исключаем начальную и конечную точки
 
         for j, cause in enumerate(causes):
             cause_x = branch_x
             cause_y = cause_positions[j]
-            # Р РёСЃСѓРµРј Р»РёРЅРёСЋ РїСЂРёС‡РёРЅС‹, РѕС‚РєР»РѕРЅСЏСЋС‰СѓСЋСЃСЏ РІР»РµРІРѕ
-            cause_line_length = 3  # РґР»РёРЅР° Р»РёРЅРёРё РїСЂРёС‡РёРЅС‹
+            # Рисуем линию причины, отклоняющуюся влево
+            cause_line_length = 3  # длина линии причины
             angle = np.degrees(np.arctan2(cause_y, cause_line_length))
             if y_direction > 0:
                 end_x = cause_x - cause_line_length * np.cos(np.radians(15))
@@ -433,24 +448,25 @@ def draw_isikava(data):
 
             ax.plot([cause_x, end_x], [cause_y, end_y], color=branch_color, linewidth=2)
 
-            # Р”РѕР±Р°РІР»СЏРµРј С‚РµРєСЃС‚ РїСЂРёС‡РёРЅС‹ РІ СЂР°РјРєРµ
+            # Добавляем текст причины в рамке
             wrapped_cause = textwrap.fill(cause, width=30)
             bbox_props_cause = dict(boxstyle="round,pad=0.3", fc="#fffacd", ec=branch_color, lw=1.5)
             ax.text(end_x - 0.5, end_y, wrapped_cause, fontsize=7, va='center',
                     ha='right', bbox=bbox_props_cause, color='#1f4e79')
 
-    # РќР°СЃС‚СЂР°РёРІР°РµРј РїСЂРµРґРµР»С‹ РѕСЃРµР№
+    # Настраиваем пределы осей
     y_max = max(5, abs(branch_y)) + max_causes * 0.5
     ax.set_xlim(-5, spine_length + 10)
     ax.set_ylim(-y_max, y_max)
 
     plt.tight_layout()
 
+
 def create_timeline(data):
     processes = list(data.keys())
     num_processes = len(processes)
     
-    # РЎРѕР±РёСЂР°РµРј РІСЃРµ РІСЂРµРјРµРЅРЅС‹Рµ РјРµС‚РєРё Рё РѕРїСЂРµРґРµР»СЏРµРј РѕР±С‰РёР№ РІСЂРµРјРµРЅРЅРѕР№ РґРёР°РїР°Р·РѕРЅ
+    # Собираем все временные метки и определяем общий временной диапазон
     all_times = set()
     for events in data.values():
         for time_interval in events.keys():
@@ -460,29 +476,29 @@ def create_timeline(data):
             all_times.update([start_time, end_time])
     all_times = sorted(all_times)
     
-    # РћРїСЂРµРґРµР»СЏРµРј РјРёРЅРёРјР°Р»СЊРЅРѕРµ Рё РјР°РєСЃРёРјР°Р»СЊРЅРѕРµ РІСЂРµРјСЏ
+    # Определяем минимальное и максимальное время
     min_time = min(all_times)
     max_time = max(all_times)
     total_minutes = (max_time - min_time).total_seconds() / 60
     
-    # РЎРѕР·РґР°РµРј С„РёРіСѓСЂСѓ Рё РѕСЃСЊ СЃ СѓРјРµРЅСЊС€РµРЅРЅС‹РјРё СЂР°Р·РјРµСЂР°РјРё Рё Р±РѕР»РµРµ РїР»РѕС‚РЅС‹Рј СЂР°СЃРїРѕР»РѕР¶РµРЅРёРµРј
+    # Создаем фигуру и ось с уменьшенными размерами и более плотным расположением
     fig, ax = plt.subplots(figsize=(10, num_processes * 1.5))
-    ax.set_title('Р’СЂРµРјРµРЅРЅР°СЏ С€РєР°Р»Р° РїСЂРѕС†РµСЃСЃРѕРІ', fontsize=14, fontweight='bold', color='#1f4e79', pad=20)
+    ax.set_title('Временная шкала процессов', fontsize=14, fontweight='bold', color='#1f4e79', pad=20)
     
-    # РќР°СЃС‚СЂР°РёРІР°РµРј РіСЂР°РЅРёС†С‹ Рё РѕС‚РєР»СЋС‡Р°РµРј РѕСЃРё РґР»СЏ СЃС‚РёР»РёР·Р°С†РёРё
+    # Настраиваем границы и отключаем оси для стилизации
     ax.set_xlim(0, total_minutes)
     ax.set_ylim(0.5, num_processes + 0.5)
     ax.axis('off')
     
-    # Р”РѕР±Р°РІР»СЏРµРј С„РѕРЅ РґР»СЏ РіСЂР°С„РёРєР°
+    # Добавляем фон для графика
     ax.set_facecolor('#f0f8ff')
     
-    # Р РёСЃСѓРµРј РіРѕСЂРёР·РѕРЅС‚Р°Р»СЊРЅС‹Рµ Р»РёРЅРёРё РґР»СЏ РїСЂРѕС†РµСЃСЃРѕРІ СЃ СѓРјРµРЅСЊС€РµРЅРЅС‹Рј СЂР°СЃСЃС‚РѕСЏРЅРёРµРј
+    # Рисуем горизонтальные линии для процессов с уменьшенным расстоянием
     for i in range(1, num_processes + 1):
         ax.hlines(i, 0, total_minutes, colors='#d3d3d3', linestyles='dotted', linewidth=1)
         ax.text(-2, i, processes[i - 1], verticalalignment='center', horizontalalignment='right', fontsize=10, color='#1f4e79')
     
-    # Р”РѕР±Р°РІР»СЏРµРј РјРµС‚РєРё РІСЂРµРјРµРЅРё РєР°Р¶РґС‹Рµ 30 РјРёРЅСѓС‚
+    # Добавляем метки времени каждые 30 минут
     time_labels = []
     time_positions = []
     current_time = min_time.replace(minute=(min_time.minute // 30) * 30, second=0, microsecond=0)
@@ -492,18 +508,18 @@ def create_timeline(data):
         time_labels.append(current_time.strftime('%H:%M'))
         current_time += timedelta(minutes=30)
     
-    # Р РёСЃСѓРµРј РІРµСЂС‚РёРєР°Р»СЊРЅС‹Рµ Р»РёРЅРёРё РґР»СЏ РјРµС‚РѕРє РІСЂРµРјРµРЅРё
+    # Рисуем вертикальные линии для меток времени
     for pos in time_positions:
         ax.vlines(pos, 0.5, num_processes + 0.5, colors='#d3d3d3', linestyles='dotted', linewidth=1)
     
-    # Р”РѕР±Р°РІР»СЏРµРј РјРµС‚РєРё РІСЂРµРјРµРЅРё РІРЅРёР·Сѓ РіСЂР°С„РёРєР°
+    # Добавляем метки времени внизу графика
     for pos, label in zip(time_positions, time_labels):
         ax.text(pos, 0.4, label, verticalalignment='top', horizontalalignment='center', fontsize=8, color='#1f4e79')
     
-    # Р¦РІРµС‚РѕРІР°СЏ РїР°Р»РёС‚СЂР° РґР»СЏ СЃРѕР±С‹С‚РёР№
+    # Цветовая палитра для событий
     event_colors = ['#add8e6', '#87ceeb', '#4682b4', '#b0c4de', '#5f9ea0']
     
-    # РћР±СЂР°Р±Р°С‚С‹РІР°РµРј СЃРѕР±С‹С‚РёСЏ РґР»СЏ РєР°Р¶РґРѕРіРѕ РїСЂРѕС†РµСЃСЃР°
+    # Обрабатываем события для каждого процесса
     for i, process in enumerate(processes, 1):
         events = data[process]
         event_list = []
@@ -516,38 +532,38 @@ def create_timeline(data):
             width = end_pos - start_pos
             event_list.append({'start': start_pos, 'end': end_pos, 'width': width, 'description': description})
         
-        # РЎРѕСЂС‚РёСЂСѓРµРј СЃРѕР±С‹С‚РёСЏ РїРѕ РІСЂРµРјРµРЅРё РЅР°С‡Р°Р»Р°
+        # Сортируем события по времени начала
         event_list.sort(key=lambda x: x['start'])
         
-        # РћР±СЂР°Р±Р°С‚С‹РІР°РµРј РїРµСЂРµСЃРµРєР°СЋС‰РёРµСЃСЏ СЃРѕР±С‹С‚РёСЏ
+        # Обрабатываем пересекающиеся события
         layers = []
         for event in event_list:
             placed = False
             for layer_index, layer in enumerate(layers):
-                # РџСЂРѕРІРµСЂСЏРµРј, РїРµСЂРµСЃРµРєР°РµС‚СЃСЏ Р»Рё СЃРѕР±С‹С‚РёРµ СЃ РґСЂСѓРіРёРјРё РІ СЌС‚РѕРј СЃР»РѕРµ
+                # Проверяем, пересекается ли событие с другими в этом слое
                 if all(event['start'] >= e['end'] or event['end'] <= e['start'] for e in layer):
                     layer.append(event)
                     event['layer'] = layer_index
                     placed = True
                     break
             if not placed:
-                # РЎРѕР·РґР°РµРј РЅРѕРІС‹Р№ СЃР»РѕР№
+                # Создаем новый слой
                 layers.append([event])
                 event['layer'] = len(layers) - 1
         
-        # РћС‚СЂРёСЃРѕРІС‹РІР°РµРј СЃРѕР±С‹С‚РёСЏ СЃ СѓС‡РµС‚РѕРј СЃР»РѕРµРІ
+        # Отрисовываем события с учетом слоев
         max_layer = max(event['layer'] for event in event_list) if event_list else 0
         layer_height = 0.6 / (max_layer + 1)
         
         for event in event_list:
             layer_offset = layer_height * event['layer']
             rect_y = i - 0.3 + layer_offset
-            rect_height = layer_height * 0.9  # РЅРµРјРЅРѕРіРѕ СѓРјРµРЅСЊС€Р°РµРј РІС‹СЃРѕС‚Сѓ РґР»СЏ РѕС‚СЃС‚СѓРїРѕРІ
-            # Р’С‹Р±РёСЂР°РµРј С†РІРµС‚ РґР»СЏ СЃРѕР±С‹С‚РёСЏ
+            rect_height = layer_height * 0.9  # немного уменьшаем высоту для отступов
+            # Выбираем цвет для события
             color_index = event['layer'] % len(event_colors)
             event_color = event_colors[color_index]
             
-            # Р”РѕР±Р°РІР»СЏРµРј С‚РµРЅСЊ
+            # Добавляем тень
             shadow = Rectangle(
                 (event['start'] + 0.5, rect_y - 0.05),
                 event['width'],
@@ -560,7 +576,7 @@ def create_timeline(data):
             )
             ax.add_patch(shadow)
             
-            # Р РёСЃСѓРµРј РїСЂСЏРјРѕСѓРіРѕР»СЊРЅРёРє СЃРѕР±С‹С‚РёСЏ
+            # Рисуем прямоугольник события
             rect = Rectangle(
                 (event['start'], rect_y),
                 event['width'],
@@ -576,8 +592,8 @@ def create_timeline(data):
             )
             ax.add_patch(rect)
             
-            # Р”РѕР±Р°РІР»СЏРµРј С‚РµРєСЃС‚ СЃ РїРµСЂРµРЅРѕСЃРѕРј
-            max_chars = max(5, int(event['width'] / (total_minutes / 50)) * 2)  # РќР°СЃС‚СЂРѕР№РєР° С€РёСЂРёРЅС‹ РґР»СЏ РїРµСЂРµРЅРѕСЃР°
+            # Добавляем текст с переносом
+            max_chars = max(5, int(event['width'] / (total_minutes / 50)) * 2)  # Настройка ширины для переноса
             wrapped_text = '\n'.join(textwrap.wrap(event['description'], width=max_chars))
             
             ax.text(
@@ -592,53 +608,52 @@ def create_timeline(data):
                 clip_on=False
             )
     
-    # Р”РѕР±Р°РІР»СЏРµРј Р»РµРіРµРЅРґСѓ
+    # Добавляем легенду
     #custom_patches = [Rectangle((0,0),1,1, facecolor=color, edgecolor='#1f4e79') for color in event_colors]
-    #legend_labels = ['РЎР»РѕР№ {}'.format(i+1) for i in range(len(event_colors))]
-    #ax.legend(custom_patches, legend_labels, loc='upper right', fontsize=8, title='РЎР»РѕРё СЃРѕР±С‹С‚РёР№', title_fontsize=9)
+    #legend_labels = ['Слой {}'.format(i+1) for i in range(len(event_colors))]
+    #ax.legend(custom_patches, legend_labels, loc='upper right', fontsize=8, title='Слои событий', title_fontsize=9)
     
     plt.tight_layout()
     #plt.show()
 
 
-
-# Р—Р°РїРѕР»РЅРµРЅРёРµ РѕС‚С‡РµС‚Р° РїРѕ РІРѕРїСЂРѕСЃР°Рј
+# Заполнение отчета по вопросам
 @app.post("/api/fill_report")
 async def fill_report(data: ReportData):
-    # РћС‚РєСЂС‹РІР°РµРј С€Р°Р±Р»РѕРЅ РґРѕРєСѓРјРµРЅС‚Р°
+    # Открываем шаблон документа
     doc = Document(data.template_path)
 
-    # РћР±СЂР°Р±Р°С‚С‹РІР°РµРј С‚Р°Р±Р»РёС†С‹
+    # Обрабатываем таблицы
     for table in doc.tables:
         for row in table.rows:
             for i, cell in enumerate(row.cells):
-                # РС‰РµРј СЏС‡РµР№РєСѓ СЃ С‚РµРєСЃС‚РѕРј "РћРїСЂРѕСЃ РЅР°С‡Р°С‚ РІ" Рё РІСЃС‚Р°РІР»СЏРµРј РІСЂРµРјСЏ РЅР°С‡Р°Р»Р° РІ СЃР»РµРґСѓСЋС‰СѓСЋ СЏС‡РµР№РєСѓ
-                if 'РћРїСЂРѕСЃ РЅР°С‡Р°С‚ РІ' in cell.text and i + 1 < len(row.cells):
+                # Ищем ячейку с текстом "Опрос начат в" и вставляем время начала в следующую ячейку
+                if 'Опрос начат в' in cell.text and i + 1 < len(row.cells):
                     row.cells[i + 1].text = data.start_time.split(':')[0]
                     row.cells[i + 3].text = data.start_time.split(':')[1]
-                # РС‰РµРј СЏС‡РµР№РєСѓ СЃ С‚РµРєСЃС‚РѕРј "РћРїСЂРѕСЃ РѕРєРѕРЅС‡РµРЅ РІ" Рё РІСЃС‚Р°РІР»СЏРµРј РІСЂРµРјСЏ РѕРєРѕРЅС‡Р°РЅРёСЏ РІ СЃР»РµРґСѓСЋС‰СѓСЋ СЏС‡РµР№РєСѓ
-                if 'РћРїСЂРѕСЃ РѕРєРѕРЅС‡РµРЅ РІ' in cell.text and i + 1 < len(row.cells):
+                # Ищем ячейку с текстом "Опрос окончен в" и вставляем время окончания в следующую ячейку
+                if 'Опрос окончен в' in cell.text and i + 1 < len(row.cells):
                     row.cells[i + 1].text = data.finish_time.split(':')[0]
                     row.cells[i + 3].text = data.finish_time.split(':')[1]
 
-    # Р—Р°РјРµРЅР° С‚РµРєСЃС‚Р° РІРѕРїСЂРѕСЃРѕРІ
+    # Замена текста вопросов
     for para in doc.paragraphs:
-        if 'РјРѕРіСѓ РїРѕРєР°Р·Р°С‚СЊ СЃР»РµРґСѓСЋС‰РµРµ:' in para.text:
+        if 'могу показать следующее:' in para.text:
             para.add_run(f'\n\n{data.questions_text}')
 
-    # Р—Р°РјРµРЅР° РґР°РЅРЅС‹С… Рѕ С‡РµР»РѕРІРµРєРµ
+    # Замена данных о человеке
     about_fields = [
-        '1. Р¤Р°РјРёР»РёСЏ, РёРјСЏ, РѕС‚С‡РµСЃС‚РІРѕ (РїСЂРё РЅР°Р»РёС‡РёРё)',
-        '2. Р”Р°С‚Р° СЂРѕР¶РґРµРЅРёСЏ',
-        '3. РњРµСЃС‚Рѕ СЂРѕР¶РґРµРЅРёСЏ',
-        '4. РњРµСЃС‚Рѕ Р¶РёС‚РµР»СЊСЃС‚РІР° Рё (РёР»Рё) СЂРµРіРёСЃС‚СЂР°С†РёРё',
-        '5. РўРµР»РµС„РѕРЅ',
-        '6. Р­Р»РµРєС‚СЂРѕРЅРЅР°СЏ РїРѕС‡С‚Р°',
-        '7. Р“СЂР°Р¶РґР°РЅСЃС‚РІРѕ',
-        '8. РћР±СЂР°Р·РѕРІР°РЅРёРµ',
-        '9. РЎРµРјРµР№РЅРѕРµ РїРѕР»РѕР¶РµРЅРёРµ',
-        '10. РњРµСЃС‚Рѕ СѓС‡РµР±С‹ РёР»Рё СЂР°Р±РѕС‚С‹',
-        '11. РџСЂРѕС„РµСЃСЃРёСЏ, РґРѕР»Р¶РЅРѕСЃС‚СЊ'
+        '1. Фамилия, имя, отчество (при наличии)',
+        '2. Дата рождения',
+        '3. Место рождения',
+        '4. Место жительства и (или) регистрации',
+        '5. Телефон',
+        '6. Электронная почта',
+        '7. Гражданство',
+        '8. Образование',
+        '9. Семейное положение',
+        '10. Место учебы или работы',
+        '11. Профессия, должность'
     ]
 
     idx = 0
@@ -651,12 +666,12 @@ async def fill_report(data: ReportData):
                     if idx >= len(data.list_about_questions):
                         break
 
-    # РЎРѕС…СЂР°РЅСЏРµРј РґРѕРєСѓРјРµРЅС‚ РІРѕ РІСЂРµРјРµРЅРЅС‹Р№ РїРѕС‚РѕРє
+    # Сохраняем документ во временный поток
     file_stream = io.BytesIO()
     doc.save(file_stream)
-    file_stream.seek(0)  # РЎР±СЂР°СЃС‹РІР°РµРј СѓРєР°Р·Р°С‚РµР»СЊ РЅР° РЅР°С‡Р°Р»Рѕ С„Р°Р№Р»Р°
+    file_stream.seek(0)  # Сбрасываем указатель на начало файла
 
-    # Р’РѕР·РІСЂР°С‰Р°РµРј С„Р°Р№Р» РґР»СЏ СЃРєР°С‡РёРІР°РЅРёСЏ
+    # Возвращаем файл для скачивания
     headers = {
         'Content-Disposition': 'attachment; filename="filled_report.docx"'
     }
@@ -664,26 +679,28 @@ async def fill_report(data: ReportData):
     return StreamingResponse(file_stream, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document", headers=headers)
 
 
-# Р“РµРЅРµСЂР°С†РёСЏ json-СЃС‚СЂСѓРєС‚СѓСЂ РїРѕ РѕС‚РІРµС‚Р°Рј
+# Генерация json-структур по ответам
 @app.post('/api/create-schedule')
 def create_schedule(text: FormattedText):
     json_data = llama_create_schedule(text.formatted_text)
     return {'timeline': json_data}
+
 
 @app.post('/api/create-isikava')
 def create_isikava(text: FormattedText):
     json_data = llama_create_isikava(text.formatted_text)
     return {'isikava': json_data}
 
+
 def extract_json_object(s):
-    # РќР°С…РѕРґРёРј РІСЃРµ СЃРёРјРІРѕР»С‹ РјРµР¶РґСѓ РїРµСЂРІРѕР№ "{" Рё РїРѕСЃР»РµРґРЅРµР№ "}"
+    # Находим все символы между первой "{" и последней "}"
     match = re.search(r'\{.*\}', s, re.DOTALL)
     if match:
         return match.group(0)
     return None
 
 
-# Р“РµРЅРµСЂР°С†РёСЏ РёР·РѕР±СЂР°Р¶РµРЅРёР№
+# Генерация изображений
 @app.post('/api/generate-ishikawa-image')
 def generate_ishikawa_image(text: FormattedText):
     try:
@@ -698,6 +715,7 @@ def generate_ishikawa_image(text: FormattedText):
         print(str(e))
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post('/api/generate-timeline-image')
 def generate_timeline_image(text: FormattedText):
@@ -723,14 +741,14 @@ def choose_option(request: OptionRequest):
     options = request.options
     answer = request.answer_text
 
-    prompt = "РџРѕРјРѕРіРё РјРЅРµ РІС‹Р±СЂР°С‚СЊ Рє РєР°РєРѕРјСѓ РёР· РІР°СЂРёР°РЅС‚РѕРІ Р±Р»РёР¶Рµ РІСЃРµРіРѕ РѕС‚РІРµС‚ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ РїРѕР¶Р°Р»СѓР№СЃС‚Р°!\n\n"
-    prompt += f"РћС‚РІРµС‚ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ: {answer}\n\n"
+    prompt = "Помоги мне выбрать к какому из вариантов ближе всего ответ пользователя пожалуйста!\n\n"
+    prompt += f"Ответ пользователя: {answer}\n\n"
 
-    prompt += "Р’Р°СЂРёР°РЅС‚С‹ РѕС‚РІРµС‚Р°:\n"
+    prompt += "Варианты ответа:\n"
     for option in options:
         prompt += f"{option} - {options[option]['title']}\n"
      
-    prompt += "\nР’РµСЂРЅРё РјРЅРµ С‚РѕР»СЊРєРѕ РЅРѕРјРµСЂ/С†РёС„СЂСѓ РІС‹Р±СЂР°РЅРЅРѕРіРѕ С‚РѕР±РѕР№ РІР°СЂРёР°РЅС‚Р°. Р•СЃР»Рё С‚С‹ РЅРµ РјРѕР¶РµС€СЊ РѕС‚РЅРµСЃС‚Рё РѕС‚РІРµС‚ РЅРµ Рє РѕРґРЅРѕРјСѓ РёР· РїСЂРµРґР»РѕР¶РµРЅРЅС‹С… РІР°СЂРёР°С‚РѕРІ (РѕС‚РІРµС‚ РЅР°СЃС‚РѕР»СЊРєРѕ РЅРµРѕРґРЅРѕР·РЅР°С‡РµРЅ), С‚Рѕ РїРѕР¶Р°Р»СѓР№СЃС‚Р° РѕС‚РІРµС‚СЊ С‡РёСЃР»РѕРј '0'"
+    prompt += "\nВерни мне только номер/цифру выбранного тобой варианта. Если ты не можешь отнести ответ не к одному из предложенных вариатов (ответ настолько неоднозначен), то пожалуйста ответь числом '0'"
 
     # return 0
 
@@ -745,7 +763,8 @@ def choose_option(request: OptionRequest):
         except Exception:
             attempts += 1
     return 0
-    
+
+
 # Endpoint to get the question
 # Question id example: branch-sheet-block-question_num
 @app.get("/api/get-question/{question_id}")
@@ -760,27 +779,27 @@ def get_questions(question_id: str):
     return questions_all[branch][sheet][block][question_num]
 
 
-# FastAPI РјР°СЂС€СЂСѓС‚ РґР»СЏ РїСЂРёРµРјР° Рё СЃРѕС…СЂР°РЅРµРЅРёСЏ РѕС‚РІРµС‚РѕРІ
+# FastAPI маршрут для приема и сохранения ответов
 @app.post("/api/submit-answers")
 def submit_answers(answers: Answers):
     try:
         print("Saving answers")
-        # Р”Р°РЅРЅС‹Рµ Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё РІР°Р»РёРґРёСЂСѓСЋС‚СЃСЏ СЃ РїРѕРјРѕС‰СЊСЋ Pydantic
+        # Данные автоматически валидируются с помощью Pydantic
         validated_answers = answers.dict()
 
         formatted_text = ""
         for x in validated_answers['questions']:
-            formatted_text += f"Р’РѕРїСЂРѕСЃ: {x['question']}\n"
+            formatted_text += f"Вопрос: {x['question']}\n"
             if x["answer_type"] == "text":
-                formatted_text += f"РћС‚РІРµС‚: {x['answer']}\n\n"
+                formatted_text += f"Ответ: {x['answer']}\n\n"
             elif x["answer_type"] in ['test', 'test-rec']:
-                formatted_text += f"РћС‚РІРµС‚: {x['options'][x['answer_option']]['title']}\n\n"
+                formatted_text += f"Ответ: {x['options'][x['answer_option']]['title']}\n\n"
 
-        # РЎРѕС…СЂР°РЅСЏРµРј РѕС‚РІРµС‚С‹ РІ JSON С„Р°Р№Р» (РѕРїС†РёРѕРЅР°Р»СЊРЅРѕ)
+        # Сохраняем ответы в JSON файл (опционально)
         with open(f'{str(validated_answers["questions"][0]["answer"])}_answers.json', 'w', encoding='utf-8') as f:
             json.dump(validated_answers, f, ensure_ascii=False, indent=4)
 
-        # РЎРѕС…СЂР°РЅСЏРµРј РґР°РЅРЅС‹Рµ РІ Р±Р°Р·Сѓ РґР°РЅРЅС‹С…
+        # Сохраняем данные в базу данных
         db = SessionLocal()
         new_log_entry = AnswerLog(
             answers_text=formatted_text,
@@ -795,38 +814,37 @@ def submit_answers(answers: Answers):
         return {"message": "Answers received and saved successfully."}
 
     except Exception as e:
-        # РџРµСЂРµС…РІР°С‚ РёСЃРєР»СЋС‡РµРЅРёР№ Рё РІС‹РІРѕРґ РѕС€РёР±РєРё
-        raise HTTPException(status_code=422, detail=f"РћС€РёР±РєР° РїСЂРё РѕР±СЂР°Р±РѕС‚РєРµ РґР°РЅРЅС‹С…: {str(e)}")
+        # Перехват исключений и вывод ошибки
+        raise HTTPException(status_code=422, detail=f"Ошибка при обработке данных: {str(e)}")
 
 
-# Р¤РѕСЂРјР°С‚РёСЂРѕРІР°РЅРёРµ РѕС‚РІРµС‚РѕРІ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ
+# Форматирование ответов пользователя
 @app.post('/api/format-answers')
 def format_answers(answers: Answers):
     try:
         print("Formatting answers")
 
-        # Р”Р°РЅРЅС‹Рµ Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё РІР°Р»РёРґРёСЂСѓСЋС‚СЃСЏ СЃ РїРѕРјРѕС‰СЊСЋ Pydantic
+        # Данные автоматически валидируются с помощью Pydantic
         validated_answers = answers.dict()
 
         formatted_text = ""
 
         for x in validated_answers['questions']:
-            formatted_text += f"Р’РѕРїСЂРѕСЃ: {x['question']}\n"
+            formatted_text += f"Вопрос: {x['question']}\n"
 
             if x["answer_type"] == "text":
-                formatted_text += f"РћС‚РІРµС‚: {x['answer']}\n\n"
+                formatted_text += f"Ответ: {x['answer']}\n\n"
             elif x["answer_type"] in ['test', 'test-rec']:
-                formatted_text += f"РћС‚РІРµС‚: {x['options'][x['answer_option']]['title']}\n\n"
+                formatted_text += f"Ответ: {x['options'][x['answer_option']]['title']}\n\n"
 
         return {"formatted_text": formatted_text}
     
     except Exception as e:
-        # РџРµСЂРµС…РІР°С‚ РёСЃРєР»СЋС‡РµРЅРёР№ Рё РІС‹РІРѕРґ РѕС€РёР±РєРё
-        raise HTTPException(status_code=422, detail=f"РћС€РёР±РєР° РїСЂРё РѕР±СЂР°Р±РѕС‚РєРµ РґР°РЅРЅС‹С…: {str(e)}")
-
-
+        # Перехват исключений и вывод ошибки
+        raise HTTPException(status_code=422, detail=f"Ошибка при обработке данных: {str(e)}")
 
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)
+
+    uvicorn.run("app:app", host="127.0.0.1", port=8000, reload=True)
