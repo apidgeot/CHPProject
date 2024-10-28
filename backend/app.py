@@ -36,6 +36,8 @@ import traceback
 import re
 import aiohttp
 
+DIR = os.getcwd()
+
 app = FastAPI()
 
 IMAGE_DIR = "generated_images"
@@ -50,7 +52,8 @@ app.add_middleware(
 )
 
 
-def get_all_questions(filename="C:\\Users\dnsuser\PycharmProjects\kоsarev\\backend\questions.json"):
+def get_all_questions(filename="questions.json"):
+    filename = os.path.join(DIR, filename)
     return json.load(open(filename, 'r', encoding='utf-8'))
 
 
@@ -102,7 +105,7 @@ class ReportData(BaseModel):
 
 
 async def llama_request_async(prompt, max_token=None):
-    config = utils.read_config("C:\\Users\dnsuser\PycharmProjects\kоsarev\\backend\llama_config.json")
+    config = utils.read_config(os.path.join(DIR, "llama_config.json"))
     url = config['llama_url']
 
     payload = {
@@ -173,7 +176,7 @@ async def llama_create_schedule_async(formatted_text):
 @lru_cache(maxsize=512)
 def llama_request(prompt, max_token=None):
     # URL вашего сервера
-    config = utils.read_config("C:\\Users\dnsuser\PycharmProjects\kоsarev\\backend\llama_config.json")
+    config = utils.read_config(os.path.join(DIR, "llama_config.json"))
     url = config['llama_url']
 
     payload = {
@@ -786,7 +789,7 @@ def submit_answers(answers: Answers):
         print("Saving answers")
         # Данные автоматически валидируются с помощью Pydantic
         validated_answers = answers.dict()
-
+ 
         formatted_text = ""
         for x in validated_answers['questions']:
             formatted_text += f"Вопрос: {x['question']}\n"

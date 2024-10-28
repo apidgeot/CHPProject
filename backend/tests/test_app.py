@@ -3,10 +3,14 @@ import pytest
 from backend.app import (llama_request_async, get_all_questions, llama_request, llama_create_schedule_async,
                          llama_create_isikava, llama_create_schedule, get_questions)
 import pytest_aio
+import os
+
+DIR = os.getcwd()
 
 
-@pytest.mark.parametrize("filename", ["C:\\Users\dnsuser\PycharmProjects\kоsarev\\backend\questions.json"])
+@pytest.mark.parametrize("filename", ["questions.json"])
 def test_get_all_questions(filename): # Замените на ожидаемый результат
+    filename = os.path.join(DIR, filename)
     result = get_all_questions(filename)
 
     assert isinstance(result, dict)
