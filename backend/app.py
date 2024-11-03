@@ -37,7 +37,8 @@ import re
 import aiohttp
 
 DIR = os.getcwd()
-
+ID = ""
+LAST = "Нет"
 app = FastAPI()
 
 IMAGE_DIR = "generated_images"
@@ -783,13 +784,13 @@ def get_questions(question_id: str):
 
 
 # FastAPI маршрут для приема и сохранения ответов
-@app.post("/api/submit-answers")
-def submit_answers(answers: Answers):
+@app.post("/api/submit-a")
+def submit_a(answers: Answers):
     try:
         print("Saving answers")
         # Данные автоматически валидируются с помощью Pydantic
         validated_answers = answers.dict()
- 
+
         formatted_text = ""
         for x in validated_answers['questions']:
             formatted_text += f"Вопрос: {x['question']}\n"
@@ -803,21 +804,67 @@ def submit_answers(answers: Answers):
             json.dump(validated_answers, f, ensure_ascii=False, indent=4)
 
         # Сохраняем данные в базу данных
-        db = SessionLocal()
-        new_log_entry = AnswerLog(
-            answers_text=formatted_text,
-            start_time=validated_answers["start_time"],
-            end_time=validated_answers["end_time"]
-        )
-        db.add(new_log_entry)
-        db.commit()
-        db.refresh(new_log_entry)
-        db.close()
+        # db = SessionLocal()
+        # new_log_entry = AnswerLog(
+        #     answers_text=formatted_text,
+        #     start_time=validated_answers["start_time"],
+        #     end_time=validated_answers["end_time"]
+        # )
+        # db.add(new_log_entry)
+        # db.commit()
+        # db.refresh(new_log_entry)
+        # db.close()
 
         return {"message": "Answers received and saved successfully."}
 
     except Exception as e:
         # Перехват исключений и вывод ошибки
+        raise HTTPException(status_code=422, detail=f"Ошибка при обработке данных: {str(e)}")
+
+
+@app.post("/api/submit-answers")
+def submit_answers(answers: List[Answer]):
+    try:
+        for answer in answers:
+            # Валидируем каждый ответ отдельно
+            validated_answer = answer.dict()
+
+            formatted_text = ""
+            if validated_answer["answer_type"] in ['test', 'test-rec']:
+               validated_answer["answer"] = validated_answer['options'][validated_answer['answer_option']]['title']
+
+            if validated_answer["question"] == "Индентификатор вопроса":
+                ID = validated_answer["answer"]
+                validated_answer["next_question"] = "2"
+            # elif validated_answer["question"] == "Кто-то еще должен пройти опрос по этому инциденту?":
+            #     LAST = validated_answer["answer"]
+            #     if check_id():
+            #         circs = check_cirks()
+
+
+            with open(f'{str(validated_answer["question"][0]["answer"])}_answers.json', 'w', encoding='utf-8') as f:
+                json.dump(validated_answer, f, ensure_ascii=False, indent=4)
+
+            db = SessionLocal()
+            new_log_entry = AnswerLog(
+                answers_text=f"Вопрос: {validated_answer['question']}\nОтвет: {validated_answer['answer']}\n\n",
+                start_time=validated_answer["start_time"],
+                end_time=validated_answer["end_time"]
+            )
+            db.add(new_log_entry)
+            db.commit()
+            db.refresh(new_log_entry)
+            db.close()
+
+            # if validated_answer["question"] == "Индентификатор вопроса":
+            #     ID = validated_answer["answer"]
+            # elif validated_answer["question"] == "Кто-то еще должен пройти опрос по этому инциденту?":
+            #     LAST = validated_answer["answer"]
+            #     if check_id():
+            #         circs = check_cirks()
+
+        return {"message": "Answers received and saved successfully."}
+    except Exception as e:
         raise HTTPException(status_code=422, detail=f"Ошибка при обработке данных: {str(e)}")
 
 
