@@ -3,7 +3,7 @@
         "base_sheet": {
             "base_block": {
                 "0": {
-                    "question": "Индентификатор вопроса",
+                    "question": "Идентификатор вопроса",
                     "answer_type": "text",
                     "next_question": "1"
                 },
@@ -15,7 +15,7 @@
                             "title": "Да"
                         },
                         "2": {
-                            "title": "Нетe"
+                            "title": "Нет"
                         }
                     },
                     "next_question": "2"
